@@ -1,0 +1,174 @@
+CS 179 Set 5
+Due 5/11/15 @ 3PM
+Submit completed set as one of {.zip, .tar, .tgz} to emartin@caltech.edu
+
+Please include how long you spent on the set in the README.txt file. You can
+also leave any general course or problem set feedback there as well.
+
+
+Brief summary of set:
+--------------------------------------------------------------------------------
+Cluster Yelp reviews using a stream clustering algorithm.
+
+
+Background:
+--------------------------------------------------------------------------------
+Yelp is a website where users can leave reviews of restaurants, doctors, car
+shops, and all kinds of other businesses. Yelp has released a great dataset that
+we're going to explore on this set: http://www.yelp.com/dataset_challenge .
+This dataset contains ~1.5 million reviews of ~61,000 businesses.
+
+Clustering is the process of dividing data into groups with similar
+characteristics. As the idea of clustering is best presented visually, see
+http://en.wikipedia.org/wiki/Cluster_analysis for many great diagrams.
+
+The most common clustering algorithm is called k-means clustering and involves
+randomly initializing k "cluster centers" and then iteratively mapping each
+point to the closest cluster center, updating the "cluster center" location
+to be the average of cluster's points. This requires many locations to converge
+and does not find a global optima. Additionally, the user must specify k, the
+number of clusters.
+
+Streaming algorithms are algorithms that see each data point only once and use
+only a fixed amount of memory. Streaming algorithms are very useful when
+processing large datasets or when processing high throughput streams of data
+(such as high frequency sensor data or the Twitter firehose). Streaming
+algorithms are also very important for low latency applications (because
+otherwise you would need to do some batch processing for each incoming data
+point).
+
+k-means clustering is not a streaming algorithm because it requires many
+iterations to converge. There are quite a few different schemes to approximate
+the k-means algorithm over streaming data sets. One popular option is to
+perform "sloppy k-means" with only a single pass over the dataset and with a
+greater value of k than is actually wanted. Sloppy k-means consists of mapping
+each point to a cluster and then updating the cluster location for the point.
+This can be performed on a single point or a batch of points at a time.
+Let q be the number of clusters for the sloppy online algorithm and k be the
+actual desired number of clusters. For big data applications where the total
+number of data points is known (and = n), q ~= k log(n). One can compute the
+final desired clustering by clustering the q "sloppy clusters", and the cluster
+of each point can be determined by maintaining a mapping from data point ->
+sloppy cluster -> real cluster.
+
+Analyzing textual content (such as Yelp reviews) is difficult because there is
+not an obvious way to compute the similarity between two snippets of text
+(called documents). Many methods rely on mapping documents to vectors. One
+common and easy way to map text to vectors is called "bag of words" (BOW). For
+a given document, the BOW is a vector where each component contains the number
+of occurences for a fixed word. For instance, if the first component refers to
+the word "cat" and a document contains "cat" 10 times, then the first component
+of the BOW vector is 10. The number of words in a collections of documents is
+often huge (~300,000 for the Yelp reviews) and a single document generally
+contains only a very small fraction of the full set of words. This means BOW
+vectors are often sparse (have very few non-zero components). BOW leads to the
+"term-document" matrix which is a matrix where element (i, j) contains the
+number of times the ith document contains the jth word.
+
+There are more useful vector representations of documents than BOW. One of these
+representations is called latent semantic analysis (LSA). LSA works by computing
+the low-rank approximation of the term-document matrix through SVD. We can
+compute a fixed rank approximation, so each LSA vector has a fixed size of our
+choosing. This vector corresponds to the coefficients that go with the
+corresponding left and right singular vectors.
+
+
+Assignment
+--------------------------------------------------------------------------------
+You are going to "sloppy cluster" LSA representations of Yelp reviews. Your goal
+is to maximize system throughput.
+
+The term-document matrix and LSA has been computed for you (see utility.py for
+the code). The term-document matrix contains all words occuring at least 10
+times in the Yelp reviews (but excludes a list of common English words such as
+"the" and "of"). The LSA contains 50 components, so each Yelp review is
+represented as a 50 component vector with norm 1.
+
+The bag of words representation, the LSA matrices, the reviews themselves, and
+the LSA version of the reviews are all available on haru in
+/srv/cs179_set5_data
+The raw Yelp review are 1.4GB, and the LSA representations are about 1GB. You
+only need 1 of these, and the LSA representations are easier and faster to use.
+
+The "loader.py" Python script loads the data from file, extracts the review
+from the JSON, and uses the Scikit-Learn library to convert the review to BOW
+and then apply LSA. This script writes a line to stdout for each review. Each
+line consists of 50 floating point numbers seperated by a comma. This script
+requires Numpy and Scikit-Learn. You can use this script by running
+
+python loader.py PATH_TO_JSON_REVIEWS | ./cluster
+
+To run this script, both review_bow.pkl and lsa.pkl need to be in the same
+directory as loader.py
+
+Alternatively, you could use the already extracted LSA reviews. These are in the
+shuffled_lsa.txt file in haru:/srv/cs179_set5_data. These can be used as
+
+cat PATH_TO_LSA_FILE | ./cluster
+
+You might want to develop and debug using only part of the data (because the
+dataset is quite large). Running
+
+head -n 100 PATH_TO_LSA_FILE | ./cluster
+
+will cluster only the first 100 reviews.
+
+
+What you need to do
+--------------------------------------------------------------------------------
+Be sure to comment all of your code.
+
+Firstly, you should implement the sloppyClusterKernel in cluster_cuda.cu.
+Each CUDA thread should process one element of the batch at a time.
+For each batch element (a review), the distance to all cluster centers should be
+calculated. The output array should be updated to indicate which cluster each
+review belongs to, and the cluster center should be moved slightly in the
+direction of the new data pointer (as the cluster center lies at the average of
+all of the points in the cluster). The cluster population count variable should
+also be increment when a review maps into a cluster.
+
+Updating the cluster center is updating the average of all of the points in the
+cluster to include the new point. Luckily, this can be computed without storing
+all of the points that belong to the cluster. Particularly, if S_N is the average
+of elements (x_1, ..., x_N), then
+S_{N+1} =  (N * S_N + x_{N+1}) / (N + 1).
+The "atomicUpdateAverage" function implements this logic using the CAS
+primitive.
+
+The naive version of the kernel will have many non-coalesced accesses. Fixing
+these accesses is optional but will make the graders happy. The naive version
+will also call atomicUpdateAverage many times on global memory. Again, coming
+up with something more clever is excellent, but the naive solution is also
+fine. You can assume k is small enough that all of the cluster centers can
+fit in shared memory.
+
+Secondly, you need to update the "cluster" method in cluster.cc to efficiently
+copy data to and from the GPU. Use cudaMemcpyAsync and streams. Your stream
+should go
+H->D => kernel => D->H => printer callback.
+Use at least 2 sets of buffers so that you can perform multiple operations at
+once. This means you should have at least 2 device input and output buffers,
+2 host buffers to copy from (perhaps pinned for extra performance), and 2
+streams. At least 2 sets of everything is needed to run kernels and transfers
+in parallel.
+
+You should benchmark this code on a Kepler or Maxwell GPU because of a
+technology called "Hyper-Q" that makes overlapping data transfer and compute
+much easier to achieve. minuteman and mx have Kepler GPUs, haru has Fermi
+(so does not have Hyper-Q).
+
+Thirdly, analyze the performance of your clusterer and record your thoughts in
+a file called "README.txt". When you are not modifying the parameters, let
+k=50 and batch_size=2048. Some questions to consider:
+
+* What is the latency of classifying a single batch? How does this change with
+  batch size?
+
+* What is the throughput of cluster.cc in reviews / s? How does this change with
+  batch size?
+
+* Do you think you could improve performance using multiple GPUs? If so, how?
+  If not, why not?
+
+Feel free to include any other performance analysis that you think is
+interesting.

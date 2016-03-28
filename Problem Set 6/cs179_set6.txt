@@ -1,0 +1,132 @@
+CS 179
+Problem Set 6
+Due Monday 5/18 @ 3PM
+Submit to azhao@caltech.edu in an archive format (zip, tgz, tar)
+
+Brief Summary
+--------------------------------------------------------------------------------
+For this set, we are going to train a logistic regression model to classify
+Yelp reviews as either a review of a restaurant or a review of a non-restaurant
+business. Out of all 1.5 million reviews, about 1 million reviews are of
+restaurants.
+
+
+Details about given code and data
+--------------------------------------------------------------------------------
+The code for this assignment is very similar to that of set 5. There are
+updated versions of the LSA files that contain an extra binary column indicating
+whether or not the review was of a restaurant. The LSA file with the labels
+is available at
+
+Haru: /srv/cs179_set5_data/shuffled_lsa_labelled.txt
+CMS cluster: /cs/courses/cs179/public_html/2015_labs/set5_data/shuffled_lsa_labelled.txt
+
+and is 1.1GB. As a reminder, each row of this file contains 51 floating point
+numbers (50 LSA components + 1 label at the end). The file has 1,569,264 rows.
+The value 1  indicates that the review is of a restaurant and -1 indicates
+that the review is not of a restaurant.
+
+The readLSAReview function has been modified to use a stride variable, which
+makes it easier to acheive coalesced memory accesses in kernels.
+
+Either
+cat FILE | ./classify
+OR
+./classify FILE
+is a valid way to run the classify program on LSA file FILE.
+
+
+What you need to do on the set
+--------------------------------------------------------------------------------
+You are going to train a logistic regression model using gradient descent on
+mini-batches of reviews.
+
+The loss function to minimize is
+
+(1 / N) * sum_{n=1}^N log(1 + exp(-y_n w^T x_n))
+
+where N is the total number of data points, y_n is the label of point n, x_n is
+the features of point n, and w is the weights vector.
+For our case, y_n is -1 or 1, x_n is a 50 component vector, and the weights are
+therefore also a 50 component vector
+When operating on mini-batches (which is what we're going to do), N = mini-batch
+size.
+
+One way to minimize this loss function is gradient descent.
+The gradient of the loss with respect to w is
+
+grad = (-1 / N) * sum_{n=1}^N (y_n * x_n) / (1 + exp(y_n w^T x_n)
+
+The update rule for gradient descent is
+
+w := w - step_size * grad
+
+where step_size is a scalar. If step_size is too large, the weights will
+oscillate, and if step_size is too small the procedure will run too slowly, so
+you'll want to experiment with different values of step_size (try different orders
+of magnitude, somewhere in 0.01 to 10 is a good guess).
+
+Given a set of weights and an input, the prediction is sign(w^T x). Note the
+loss and the gradient both contains y w^T x expressions. We want y and w^T x to have
+the same sign, and if they do have the same sign then y w^T x > 0.
+
+Beyond using logistic regression and gradient descent, it is generally up to you
+how you want to format your code. You can change function signatures if
+necessary.
+
+The weights should be randomly initialized with small Gaussian noise (see the
+gaussianFill function). Gaussian fill is actually deterministic for this set
+due to the seeding of the generator. This will make it easier to check results
+for correctness with other students.
+
+You must fill in the trainLogRegKernel function in classify_cuda.cu. One very
+approach to this kernel is to have each thread classify one point and compute
+the contribution to the gradient of that point. Be sure to consider that all
+points in a batch are meant to be computed using the same weights, so the weight
+updating shouldn't occur until all predictions & gradients are calculated.
+
+The "classify" function in classify.cc should be main driver of the program.
+This should be similar to the "cluster" function from the previous set.
+After processing a batch, the batch number and either the value of the loss
+function over the batch or the error rate of the batch
+(misclassifications / batch_size) should be printed. These are both training
+set metric and do not determine how the model would perform on data outside
+of the training set, but this problem set is focussed on training so these
+numbers are appropriate to examine.
+
+Use of streams and asynchronous variants of SGD is not required but would be
+good practice and possibly fun.
+
+
+Performance numbers you should expect
+--------------------------------------------------------------------------------
+The solution code takes about 30s to run on minuteman. Notably, it also takes
+about 30s just to read and decode the full CSV file. This is 30MB/s of
+throughput. With the runtime so dominated by IO and parsing, writing a highly
+efficient CUDA kernel cannot have much of an impact on runtime. This task of
+training a logistic regression on streaming data is a good example of a task
+without enough computational density to be an excellent fit for GPUs.
+
+With mini-batch size of 2048, the reference code gets about 250
+misclassifications per mini-batch. This is about 12% error.
+The loss function is ~0.35 over each mini-batch (but has relatively high
+variance).
+
+
+Analysis you should perform
+--------------------------------------------------------------------------------
+Write all analysis in README.txt.
+
+How much does IO and parsing dominate your runtime? Compute this by commenting
+out all of the CUDA code and just running the loop over all of the data. You
+might have to use the data somehow (like writing it to a buffer with
+readLSAReview) to prevent the compiler from optimizing out your loop. Once you
+have program runtime with logistic regression and program runtime just from
+IO and parsing, you can compute the fraction of the time spent doing IO and
+parsing.
+
+What is the latency and throughput of your kernel for different batch sizes?
+For batch sizes 1, 32, 1024, 2048, 16384, and 65536 record the amount of time
+it takes your kernel to run (the latency) and compute the throughput
+(batch_size / latency). You should only measure the latency of the kernel
+itself, not the copying of data onto and off of the device.
